@@ -16,6 +16,7 @@
   "dependencies": {
     "@microsoft/signalr": "^10.0.0",
     "clsx": "^2.1.1",
+    "discord-rpc": "^4.0.1",
     "framer-motion": "^12.40.0",
     "lucide-react": "^1.17.0",
     "moment": "^2.30.1",

@@ -8,7 +8,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   setMode: (mode) => ipcRenderer.send('set-mode', mode),
   getSessions: () => ipcRenderer.invoke('get-sessions'),
+  openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
   setReplaySession: (sessionKey) => ipcRenderer.send('set-replay-session', sessionKey),
   setReplayControl: (command) => ipcRenderer.send('replay-control', command),
-  setFocusedDriver: (driverNumber) => ipcRenderer.send('set-focused-driver', driverNumber)
+  setFocusedDriver: (driverNumber) => ipcRenderer.send('set-focused-driver', driverNumber),
+  setDiscordPresenceEnabled: (enabled) => ipcRenderer.send('set-discord-presence-enabled', enabled)
 });

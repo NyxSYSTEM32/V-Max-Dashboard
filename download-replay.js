@@ -138,6 +138,20 @@ async function run() {
     : await fetchWithRetry(`${OPENF1}/race_control?session_key=${session.session_key}`);
   writeJson(raceControlPath, raceControl);
 
+  console.log('Fetching team radio metadata...');
+  const teamRadioPath = path.join(outDir, 'team_radio.json');
+  const teamRadio = !args.force && fs.existsSync(teamRadioPath)
+    ? JSON.parse(fs.readFileSync(teamRadioPath, 'utf8'))
+    : await fetchWithRetry(`${OPENF1}/team_radio?session_key=${session.session_key}`);
+  writeJson(teamRadioPath, teamRadio);
+
+  console.log('Fetching weather...');
+  const weatherPath = path.join(outDir, 'weather.json');
+  const weather = !args.force && fs.existsSync(weatherPath)
+    ? JSON.parse(fs.readFileSync(weatherPath, 'utf8'))
+    : await fetchWithRetry(`${OPENF1}/weather?session_key=${session.session_key}`);
+  writeJson(weatherPath, weather);
+
   for (const driverNumber of targetDrivers) {
     console.log(`Fetching car_data for driver ${driverNumber}...`);
     const carPath = path.join(outDir, `car_data.${driverNumber}.json`);
@@ -181,6 +195,8 @@ async function run() {
     lap_records: laps.length,
     stint_records: stints.length,
     race_control_records: raceControl.length,
+    team_radio_records: teamRadio.length,
+    weather_records: weather.length,
     complete: true,
     updated_at: new Date().toISOString()
   });

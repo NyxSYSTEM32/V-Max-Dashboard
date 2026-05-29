@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { LiveF1Bridge } from './live-bridge.js';
 import { LocalF1Bridge } from './localf1-bridge.js';
+import { discordPresence } from './discord-presence.js';
 import { sendF1Data, sendSourceStatus } from './f1-events.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,7 +47,9 @@ function readLocalSession(libPath, folderName) {
     interval_records: manifest?.interval_records,
     lap_records: manifest?.lap_records,
     stint_records: manifest?.stint_records,
-    race_control_records: manifest?.race_control_records
+    race_control_records: manifest?.race_control_records,
+    team_radio_records: manifest?.team_radio_records,
+    weather_records: manifest?.weather_records
   };
 }
 
@@ -76,8 +79,8 @@ function createWindow() {
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       color: '#00000000',
-      symbolColor: '#747d8c',
-      height: 32
+      symbolColor: '#4B5563',
+      height: 24
     },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -117,6 +120,18 @@ function createWindow() {
     }
   });
 
+  ipcMain.handle('open-external-url', async (event, rawUrl) => {
+    try {
+      const url = new URL(String(rawUrl));
+      if (!['https:', 'http:', 'tg:'].includes(url.protocol)) return false;
+      await shell.openExternal(url.toString());
+      return true;
+    } catch (err) {
+      console.warn('[V-Max] Refused to open external URL:', err.message);
+      return false;
+    }
+  });
+
   ipcMain.on('set-replay-session', (event, sessionKey) => {
     const parsedSessionKey = Number(sessionKey);
     if (!Number.isFinite(parsedSessionKey)) return;
@@ -140,6 +155,10 @@ function createWindow() {
   ipcMain.on('set-focused-driver', (event, driverNumber) => {
     if (!currentBridge || typeof currentBridge.setFocusedDriver !== 'function') return;
     currentBridge.setFocusedDriver(driverNumber);
+  });
+
+  ipcMain.on('set-discord-presence-enabled', (event, enabled) => {
+    discordPresence.setEnabled(enabled);
   });
 }
 
@@ -181,5 +200,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  discordPresence.setEnabled(false);
   if (process.platform !== 'darwin') app.quit();
 });

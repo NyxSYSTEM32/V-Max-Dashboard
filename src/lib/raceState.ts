@@ -5,18 +5,27 @@ import type {
 	DriverPositions,
 	F1DataEvent,
 	LeaderboardEntry,
+	LapSummary,
+	LiveHealth,
+	PerformanceEvent,
+	PitEvent,
 	RaceControlMessage,
 	ReplayControlState,
+	StintSummary,
+	TeamRadioMessage,
 	Telemetry,
 	TrackBounds,
 	TrackFlag,
 	TrackPathPoint,
+	WeatherSnapshot,
 } from "../types/ipc";
 
 export type RaceState = {
 	mode: AppMode;
 	sourceStatus: DataSourceStatus;
 	sourceMessage: string;
+	liveHealth: LiveHealth;
+	liveHealthLabel: string;
 	focusedDriverNumber: string;
 	telemetry: Telemetry;
 	trackFlag: TrackFlag;
@@ -26,6 +35,14 @@ export type RaceState = {
 	trackBounds: TrackBounds | null;
 	trackPath: TrackPathPoint[];
 	raceControlMessages: RaceControlMessage[];
+	teamRadioMessages: TeamRadioMessage[];
+	teamRadioAlertMessages: TeamRadioMessage[];
+	performanceEvents: PerformanceEvent[];
+	pitEvents: PitEvent[];
+	totalLaps: number | null;
+	weather: WeatherSnapshot | null;
+	lapSummary: LapSummary | null;
+	stintSummary: StintSummary | null;
 	replayControl: ReplayControlState;
 };
 
@@ -44,6 +61,8 @@ export const createInitialRaceState = (mode: AppMode = "archive"): RaceState => 
 	mode,
 	sourceStatus: "idle",
 	sourceMessage: "Waiting for data source",
+	liveHealth: "idle",
+	liveHealthLabel: "NO SESSION",
 	focusedDriverNumber: DEFAULT_FOCUSED_DRIVER,
 	telemetry: DEFAULT_TELEMETRY,
 	trackFlag: "Green",
@@ -53,6 +72,14 @@ export const createInitialRaceState = (mode: AppMode = "archive"): RaceState => 
 	trackBounds: null,
 	trackPath: [],
 	raceControlMessages: [],
+	teamRadioMessages: [],
+	teamRadioAlertMessages: [],
+	performanceEvents: [],
+	pitEvents: [],
+	totalLaps: null,
+	weather: null,
+	lapSummary: null,
+	stintSummary: null,
 	replayControl: DEFAULT_REPLAY_CONTROL,
 });
 
@@ -60,6 +87,8 @@ export const resetRaceState = (current: RaceState, mode = current.mode): RaceSta
 	...createInitialRaceState(mode),
 	sourceStatus: "connecting",
 	sourceMessage: mode === "live" ? "Connecting to live timing" : "Loading local replay",
+	liveHealth: mode === "live" ? "degraded" : "idle",
+	liveHealthLabel: mode === "live" ? "CONNECTING" : "REPLAY",
 });
 
 const areTrackBoundsEqual = (a: TrackBounds | null, b: TrackBounds | null | undefined) => {
@@ -96,6 +125,8 @@ export const reduceRaceState = (state: RaceState, action: RaceAction): RaceState
 			...state,
 			focusedDriverNumber: action.driverNumber,
 			telemetry: { ...state.telemetry, driverNumber: action.driverNumber },
+			teamRadioMessages: [],
+			teamRadioAlertMessages: [],
 		};
 	}
 
@@ -121,6 +152,14 @@ export const reduceRaceState = (state: RaceState, action: RaceAction): RaceState
 			trackPath,
 			trackFlag: event.trackFlag ?? state.trackFlag,
 			raceControlMessages: event.raceControlMessages ?? state.raceControlMessages,
+			teamRadioMessages: event.teamRadioMessages ?? state.teamRadioMessages,
+			teamRadioAlertMessages: event.teamRadioAlertMessages ?? state.teamRadioAlertMessages,
+			performanceEvents: event.performanceEvents ?? state.performanceEvents,
+			pitEvents: event.pitEvents ?? state.pitEvents,
+			totalLaps: event.totalLaps ?? state.totalLaps,
+			weather: event.weather !== undefined ? event.weather : state.weather,
+			lapSummary: event.lapSummary !== undefined ? event.lapSummary : state.lapSummary,
+			stintSummary: event.stintSummary !== undefined ? event.stintSummary : state.stintSummary,
 			replayControl: event.replayControl ?? state.replayControl,
 		};
 	}
@@ -187,6 +226,8 @@ export const reduceRaceState = (state: RaceState, action: RaceAction): RaceState
 		mode: event.mode,
 		sourceStatus: event.status,
 		sourceMessage: event.message ?? getDefaultSourceMessage(event.mode, event.status),
+		liveHealth: event.liveHealth ?? (event.mode === "live" ? getDefaultLiveHealth(event.status) : "idle"),
+		liveHealthLabel: event.liveHealthLabel ?? (event.mode === "live" ? getDefaultLiveHealthLabel(event.status) : "REPLAY"),
 	};
 };
 
@@ -196,4 +237,19 @@ export const getDefaultSourceMessage = (mode: AppMode, status: DataSourceStatus)
 	if (status === "error") return mode === "live" ? "Live timing failed" : "Local replay failed";
 	if (status === "stopped") return "Data source stopped";
 	return "Waiting for data source";
+};
+
+export const getDefaultLiveHealth = (status: DataSourceStatus): LiveHealth => {
+	if (status === "ready") return "healthy";
+	if (status === "connecting") return "degraded";
+	if (status === "error") return "poor";
+	return "idle";
+};
+
+export const getDefaultLiveHealthLabel = (status: DataSourceStatus) => {
+	if (status === "ready") return "HEALTHY";
+	if (status === "connecting") return "CONNECTING";
+	if (status === "error") return "OFFLINE";
+	if (status === "stopped") return "STOPPED";
+	return "NO SESSION";
 };

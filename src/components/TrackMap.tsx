@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 
 import { fetchMap } from "../lib/fetchMap";
@@ -20,6 +20,7 @@ type Props = {
 	filter?: string[];
 	circuitKey?: number;
 	drivers?: DriverMap;
+	focusedDriverNumber?: string;
 	trackStatus?: TrackStatus;
 	positions?: DriverPositions;
 	leaderboard?: LeaderboardEntry[];
@@ -27,6 +28,13 @@ type Props = {
 	trackBounds?: TrackBounds | null;
 	trackPath?: TrackPathPoint[];
 };
+
+type TrailPoint = TrackPosition & { time: number; color?: string };
+const raceSectorStyles = [
+	{ label: "S1", color: "#33E6A1", offsetX: 0, offsetY: -820 },
+	{ label: "S2", color: "#F5C86A", offsetX: -220, offsetY: -980 },
+	{ label: "S3", color: "#E879F9", offsetX: 0, offsetY: -900 },
+];
 
 const normalizePosition = (position: DriverPosition): PositionCar | null => {
 	const x = position.X ?? position.x;
@@ -57,7 +65,7 @@ const buildBounds = (sourcePoints: TrackPosition[], sourceBounds?: TrackBounds |
 	return [minX, minY, widthX, widthY] as const;
 };
 
-export default function TrackMap({ filter, circuitKey, drivers, leaderboard, trackStatus, positions, raceControlMessages, trackBounds, trackPath }: Props) {
+function TrackMap({ filter, circuitKey, drivers, focusedDriverNumber, leaderboard, trackStatus, positions, raceControlMessages, trackBounds, trackPath }: Props) {
 	const showCornerNumbers = false;
 	const favoriteDrivers: string[] = [];
 	const trackPathKey = useMemo(() => {
@@ -76,6 +84,7 @@ export default function TrackMap({ filter, circuitKey, drivers, leaderboard, tra
 	const [rotation, setRotation] = useState<number>(0);
 	const [usesRawCoordinates, setUsesRawCoordinates] = useState(false);
 	const [finishLine, setFinishLine] = useState<null | { x: number; y: number; startAngle: number }>(null);
+	const [trailHistory, setTrailHistory] = useState(new Map<string, TrailPoint[]>());
 
 	useEffect(() => {
 		const applyFallbackTrackPath = () => {
@@ -150,6 +159,7 @@ export default function TrackMap({ filter, circuitKey, drivers, leaderboard, tra
 	}, [circuitKey, trackPathKey, trackBoundsKey, trackPath, trackBounds]);
 
 	const yellowSectors = useMemo(() => findYellowSectors(raceControlMessages), [raceControlMessages]);
+	const highlightedDriverNumber = focusedDriverNumber ?? leaderboard?.find((entry) => entry.pos === 1)?.driverNumber;
 
 	const renderedSectors = useMemo(() => {
 		const status = getTrackStatusMessage(trackStatus?.Status ? Number(trackStatus.Status) : undefined);
@@ -168,12 +178,102 @@ export default function TrackMap({ filter, circuitKey, drivers, leaderboard, tra
 			})
 			.sort(prioritizeColoredSectors);
 		}, [trackStatus, sectors, yellowSectors]);
+	const renderedRaceSectors = useMemo(() => {
+		if (!points || points.length < 3) return [];
+
+		const segmentSize = Math.ceil(points.length / 3);
+		return raceSectorStyles.map((style, index) => {
+			const start = index * segmentSize;
+			const end = index === 2 ? points.length : Math.min(points.length, (index + 1) * segmentSize + 1);
+			const sectorPoints = points.slice(start, end);
+			if (sectorPoints.length < 2) return null;
+
+			const labelPoint = sectorPoints[Math.floor(sectorPoints.length / 2)];
+			return {
+				...style,
+				number: index + 1,
+				labelPoint,
+				d: `M${sectorPoints[0].x},${sectorPoints[0].y} ${sectorPoints.map((point) => `L${point.x},${point.y}`).join(" ")}`,
+			};
+		}).filter(Boolean);
+	}, [points]);
 	const renderedCarCount = positions ? Object.keys(positions).length : 0;
 	const leaderboardDriverMap = useMemo(() => {
 		const map = new Map<string, LeaderboardEntry>();
 		leaderboard?.forEach((entry) => map.set(entry.driverNumber, entry));
 		return map;
 	}, [leaderboard]);
+	useEffect(() => {
+		if (!positions || centerX === null || centerY === null) {
+			const clearId = window.setTimeout(() => setTrailHistory(new Map()), 0);
+			return () => window.clearTimeout(clearId);
+		}
+		const updateId = window.setTimeout(() => {
+			const now = Date.now();
+
+			setTrailHistory((currentHistory) => {
+				const nextHistory = new Map(currentHistory);
+
+				Object.entries(positions).forEach(([driverNumber, position]) => {
+					const driverPosition = position ? normalizePosition(position) : null;
+					if (!driverPosition) return;
+
+					const renderedPos = usesRawCoordinates ? { x: driverPosition.X, y: driverPosition.Y } : rotate(driverPosition.X, driverPosition.Y, rotation, centerX, centerY);
+					const driver = drivers?.[driverNumber];
+					const leaderboardDriver = leaderboardDriverMap.get(driverNumber);
+					const color = driver?.TeamColour ?? leaderboardDriver?.color?.replace("#", "") ?? "ffffff";
+					const history = nextHistory.get(driverNumber) ?? [];
+					const previous = history.at(-1);
+					const movedEnough = !previous || Math.hypot(previous.x - renderedPos.x, previous.y - renderedPos.y) > 25;
+					const updatedHistory = movedEnough ? [...history, { ...renderedPos, time: now, color }] : history;
+
+					nextHistory.set(driverNumber, updatedHistory.filter((point) => now - point.time < 7000).slice(-16));
+				});
+
+				return nextHistory;
+			});
+		}, 0);
+
+		return () => window.clearTimeout(updateId);
+	}, [centerX, centerY, drivers, leaderboardDriverMap, positions, rotation, usesRawCoordinates]);
+	const renderedTrails = useMemo(() => {
+		return [...trailHistory.entries()].map(([driverNumber, trail]) => ({
+			driverNumber,
+			color: trail.at(-1)?.color ?? "ffffff",
+			points: trail,
+		}));
+	}, [trailHistory]);
+	const incidentMarkers = useMemo(() => {
+		if (sectors.length === 0) return [];
+
+		return (raceControlMessages ?? [])
+			.slice(-8)
+			.filter((message) => {
+				const text = String(message.Message ?? "").toUpperCase();
+				return text.includes("INCIDENT") || text.includes("PENALTY") || text.includes("DELETED") || text.includes("INVESTIGAT");
+			})
+			.map((message, index) => {
+				const sectorNumber = Number(message.Sector);
+				if (!Number.isFinite(sectorNumber)) return null;
+
+				const sector = sectors.find((item) => item.number === sectorNumber);
+				if (!sector) return null;
+
+				const point = sector.points[Math.floor(sector.points.length / 2)];
+				if (!point) return null;
+
+				const text = String(message.Message ?? "").toUpperCase();
+				const tone = text.includes("PENALTY") || text.includes("DELETED") ? "danger" : "warning";
+				return {
+					id: `${message.Utc}.${message.Message}.${index}`,
+					x: point.x,
+					y: point.y,
+					sector: sector.number,
+					tone,
+				};
+			})
+			.filter(Boolean);
+	}, [raceControlMessages, sectors]);
 
 	if (!points || minX === null || minY === null || widthX === null || widthY === null) {
 		return (
@@ -187,12 +287,38 @@ export default function TrackMap({ filter, circuitKey, drivers, leaderboard, tra
 		<svg viewBox={`${minX} ${minY} ${widthX} ${widthY}`} className="h-full w-full xl:max-h-screen" xmlns="http://www.w3.org/2000/svg" data-rendered-cars={renderedCarCount} data-coordinate-mode={usesRawCoordinates ? "raw" : "multiviewer"}>
 			<path className="stroke-gray-800" strokeWidth={300} strokeLinejoin="round" fill="transparent" d={`M${points[0].x},${points[0].y} ${points.map((point) => `L${point.x},${point.y}`).join(" ")}`} />
 
+			{renderedRaceSectors.map((sector) => sector && (
+				<g key={`map.race-sector.${sector.number}`}>
+					<path d={sector.d} fill="transparent" stroke={sector.color} strokeWidth={320} strokeLinecap="round" strokeLinejoin="round" opacity={0.28} />
+					<path d={sector.d} fill="transparent" stroke={sector.color} strokeWidth={118} strokeLinecap="round" strokeLinejoin="round" opacity={0.62} />
+					<path d={sector.d} fill="transparent" stroke={sector.color} strokeWidth={42} strokeLinecap="round" strokeLinejoin="round" opacity={0.96} />
+					<g transform={`translate(${sector.labelPoint.x + sector.offsetX} ${sector.labelPoint.y + sector.offsetY})`}>
+						<rect x={-330} y={-260} width={660} height={360} rx={54} fill="#0B1018" stroke={sector.color} strokeWidth={34} opacity={0.96} />
+						<text x={0} y={-18} fill={sector.color} fontSize={330} fontWeight="900" textAnchor="middle">{sector.label}</text>
+					</g>
+				</g>
+			))}
+
 			{renderedSectors.map((sector) => {
 				const style = sector.pulse ? { animation: `${sector.pulse * 100}ms linear infinite pulse` } : {};
 				return <path key={`map.sector.${sector.number}`} className={sector.color} strokeWidth={sector.strokeWidth} strokeLinecap="round" strokeLinejoin="round" fill="transparent" d={sector.d} style={style} />;
 			})}
 
 			{finishLine && <rect x={finishLine.x - 75} y={finishLine.y} width={240} height={20} fill="red" stroke="red" strokeWidth={70} transform={`rotate(${finishLine.startAngle + 90}, ${finishLine.x + 25}, ${finishLine.y})`} />}
+
+			{renderedTrails.map((trail) => {
+				if (trail.points.length < 2) return null;
+				const d = `M${trail.points[0].x},${trail.points[0].y} ${trail.points.map((point) => `L${point.x},${point.y}`).join(" ")}`;
+				return <path key={`map.trail.${trail.driverNumber}`} d={d} fill="transparent" stroke={`#${trail.color}`} strokeWidth={highlightedDriverNumber === trail.driverNumber ? 52 : 28} strokeLinecap="round" strokeLinejoin="round" opacity={highlightedDriverNumber === trail.driverNumber ? 0.36 : 0.16} />;
+			})}
+
+			{incidentMarkers.map((marker) => marker && (
+				<g key={`map.incident.${marker.id}`} transform={`translate(${marker.x} ${marker.y})`}>
+					<circle r={170} fill={marker.tone === "danger" ? "#FF1801" : "#F5C86A"} opacity={0.22} />
+					<circle r={82} fill="transparent" stroke={marker.tone === "danger" ? "#FF1801" : "#F5C86A"} strokeWidth={32} />
+					<text x={120} y={-95} fill={marker.tone === "danger" ? "#FF1801" : "#F5C86A"} fontSize={220} fontWeight="bold">S{marker.sector}</text>
+				</g>
+			))}
 
 			{showCornerNumbers && corners.map((corner) => <CornerNumber key={`corner.${corner.number}`} number={corner.number} x={corner.labelPos.x} y={corner.labelPos.y} />)}
 
@@ -216,6 +342,7 @@ export default function TrackMap({ filter, circuitKey, drivers, leaderboard, tra
 									name={driver?.Tla ?? leaderboardDriver?.driver ?? driverNumber}
 									color={driver?.TeamColour ?? leaderboardDriver?.color?.replace("#", "")}
 									pit={false}
+									focused={highlightedDriverNumber === driverNumber}
 									hidden={trackBounds === null && Object.keys(positions).length === 0}
 									pos={driverPosition}
 									rotation={rotation}
@@ -237,6 +364,8 @@ type CornerNumberProps = {
 	y: number;
 };
 
+export default memo(TrackMap);
+
 const CornerNumber = ({ number, x, y }: CornerNumberProps) => {
 	return (
 		<text x={x} y={y} className="fill-zinc-700" fontSize={300} fontWeight="semibold">
@@ -250,6 +379,7 @@ type CarDotProps = {
 	color: string | undefined;
 	favoriteDriver: boolean;
 	pit: boolean;
+	focused: boolean;
 	hidden: boolean;
 	pos: PositionCar;
 	rotation: number;
@@ -258,7 +388,7 @@ type CarDotProps = {
 	usesRawCoordinates: boolean;
 };
 
-const CarDot = ({ pos, name, color, favoriteDriver, pit, hidden, rotation, centerX, centerY, usesRawCoordinates }: CarDotProps) => {
+const CarDot = ({ pos, name, color, favoriteDriver, pit, focused, hidden, rotation, centerX, centerY, usesRawCoordinates }: CarDotProps) => {
 	const renderedPos = usesRawCoordinates ? { x: pos.X, y: pos.Y } : rotate(pos.X, pos.Y, rotation, centerX, centerY);
 
 	return (
@@ -270,6 +400,8 @@ const CarDot = ({ pos, name, color, favoriteDriver, pit, hidden, rotation, cente
 				...(color && { fill: `#${color}` }),
 			}}
 		>
+			{focused && <circle id="map.driver.focused" r={250} fill="transparent" stroke="#33E6A1" strokeWidth={44} opacity={0.95} />}
+			{focused && <circle id="map.driver.focused.glow" r={340} fill="#33E6A1" opacity={0.12} />}
 			<circle id="map.driver.circle" r={120} />
 			<text id="map.driver.text" x={150} y={-120} fontWeight="bold" fontSize={360}>
 				{name}

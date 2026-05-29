@@ -37,6 +37,30 @@ class LiveF1Bridge {
     this.reconnectTimer = null;
     this.focusedDriverNumber = '1';
     this.latestCars = {};
+    this.sessionInfo = null;
+    this.lastHeartbeatAt = 0;
+    this.lastCarDataAt = 0;
+    this.lastPositionAt = 0;
+    this.lastTimingDataAt = 0;
+  }
+
+  getLiveHealth() {
+    if (!this.isPlaying) return { health: 'idle', label: 'NO SESSION' };
+
+    const now = Date.now();
+    const hasSession = Boolean(this.sessionInfo);
+    const hasTelemetry = now - Math.max(this.lastCarDataAt, this.lastPositionAt, this.lastTimingDataAt) < 15_000;
+    const hasFreshHeartbeat = now - this.lastHeartbeatAt < 30_000;
+
+    if (hasTelemetry && hasFreshHeartbeat) return { health: 'healthy', label: 'HEALTHY' };
+    if (hasSession && hasFreshHeartbeat) return { health: 'degraded', label: 'LAST SNAPSHOT' };
+    if (hasSession) return { health: 'degraded', label: 'STALE SNAPSHOT' };
+    return { health: 'poor', label: 'NO FEED' };
+  }
+
+  sendLiveStatus(status, message) {
+    const { health, label } = this.getLiveHealth();
+    sendSourceStatus(this.mainWindow, 'live', status, message, health, label);
   }
 
   async negotiate() {
@@ -63,7 +87,7 @@ class LiveF1Bridge {
   async start() {
     if (this.isPlaying) return Promise.resolve();
     this.isPlaying = true;
-    sendSourceStatus(this.mainWindow, 'live', 'connecting', 'Negotiating live timing connection');
+    this.sendLiveStatus('connecting', 'Negotiating live timing connection');
 
     try {
       await this.negotiate();
@@ -72,7 +96,7 @@ class LiveF1Bridge {
     } catch (err) {
       console.error('[LiveF1 Bridge] Failed to start:', err);
       this.isPlaying = false;
-      sendSourceStatus(this.mainWindow, 'live', 'error', err.message);
+      this.sendLiveStatus('error', err.message);
       throw err;
     }
   }
@@ -92,7 +116,8 @@ class LiveF1Bridge {
 
     this.ws.on('open', () => {
       console.log('[LiveF1 Bridge] WebSocket Connected! Subscribing to topics...');
-      sendSourceStatus(this.mainWindow, 'live', 'ready', 'Live timing connected');
+      this.lastHeartbeatAt = Date.now();
+      this.sendLiveStatus('ready', 'Live timing connected');
       
       const subscribeMsg = {
         H: HUB,
@@ -106,7 +131,11 @@ class LiveF1Bridge {
 
     this.ws.on('message', (data) => {
       const msgStr = data.toString();
-      if (msgStr === '{}') return; // Heartbeat ping
+      if (msgStr === '{}') {
+        this.lastHeartbeatAt = Date.now();
+        this.sendLiveStatus('ready', 'Live timing heartbeat');
+        return;
+      }
       
       try {
         const parsed = JSON.parse(msgStr);
@@ -116,14 +145,14 @@ class LiveF1Bridge {
           parsed.M.forEach(update => {
             const topic = update.A[0];
             const payload = update.A[1];
-            this.handleUpdate(topic, payload);
+            this.handleUpdate(topic, payload, false);
           });
         }
         
         // Handle initial state (R)
         if (parsed.R && typeof parsed.R === 'object') {
           for (const [topic, payload] of Object.entries(parsed.R)) {
-            this.handleUpdate(topic, payload);
+            this.handleUpdate(topic, payload, true);
           }
         }
       } catch (err) {
@@ -133,22 +162,22 @@ class LiveF1Bridge {
 
     this.ws.on('error', (err) => {
       console.error('[LiveF1 Bridge] WebSocket Error:', err);
-      sendSourceStatus(this.mainWindow, 'live', 'error', err.message);
+      sendSourceStatus(this.mainWindow, 'live', 'error', err.message, 'poor', 'OFFLINE');
     });
 
     this.ws.on('close', () => {
       console.log('[LiveF1 Bridge] WebSocket Closed.');
       if (this.isPlaying) {
         console.log('[LiveF1 Bridge] Reconnecting in 5s...');
-        sendSourceStatus(this.mainWindow, 'live', 'connecting', 'Live timing disconnected, reconnecting');
+        sendSourceStatus(this.mainWindow, 'live', 'connecting', 'Live timing disconnected, reconnecting', 'poor', 'RECONNECTING');
         this.reconnectTimer = setTimeout(() => this.connect(), 5000);
       } else {
-        sendSourceStatus(this.mainWindow, 'live', 'stopped', 'Live timing stopped');
+        sendSourceStatus(this.mainWindow, 'live', 'stopped', 'Live timing stopped', 'idle', 'STOPPED');
       }
     });
   }
 
-  handleUpdate(topic, payload) {
+  handleUpdate(topic, payload, isInitialState = false) {
     let data = payload;
 
     // Handle .z deflated base64 payloads
@@ -162,6 +191,18 @@ class LiveF1Bridge {
         console.error(`[LiveF1 Bridge] Failed to decompress ${topic}:`, err.message);
         return;
       }
+    }
+
+    if (topic === 'Heartbeat') {
+      this.lastHeartbeatAt = Date.now();
+      this.sendLiveStatus('ready', 'Live timing heartbeat');
+    }
+
+    if (topic === 'SessionInfo') {
+      this.sessionInfo = data;
+      const meetingName = data?.Meeting?.Name || data?.Meeting?.OfficialName || 'Live timing';
+      const sessionName = data?.Name || data?.Type || 'session';
+      this.sendLiveStatus('ready', `${meetingName} - ${sessionName}`);
     }
 
     if (topic === 'TrackStatus') {
@@ -198,6 +239,7 @@ class LiveF1Bridge {
     }
 
     if (topic === 'TimingData') {
+      if (!isInitialState) this.lastTimingDataAt = Date.now();
       if (data.Lines) {
         if (!this.timingLines) this.timingLines = {};
         // Merge timing data incrementally
@@ -223,6 +265,7 @@ class LiveF1Bridge {
     }
 
     if (topic === 'CarData') {
+      if (!isInitialState) this.lastCarDataAt = Date.now();
       if (data.Entries && data.Entries[0] && data.Entries[0].Cars) {
         this.latestCars = { ...this.latestCars, ...data.Entries[0].Cars };
         if (this.updateTelemetryFromFocusedCar()) this.sendTelemetry();
@@ -230,6 +273,7 @@ class LiveF1Bridge {
     }
 
     if (topic === 'Position') {
+      if (!isInitialState) this.lastPositionAt = Date.now();
       if (data.Position && data.Position[0] && data.Position[0].Entries) {
         if (!this.positions) this.positions = {};
         for (const [num, pos] of Object.entries(data.Position[0].Entries)) {

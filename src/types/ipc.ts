@@ -25,6 +25,67 @@ export type LeaderboardEntry = {
 	lap?: number;
 	compound?: string;
 	tyreAge?: number;
+	sectors?: SectorSnapshot[];
+};
+
+export type SectorStatus = "none" | "completed" | "personal" | "overall";
+
+export type SectorSnapshot = {
+	sector: number;
+	status: SectorStatus;
+	value?: number;
+	lap?: number;
+	bestPersonal?: number;
+	bestOverall?: number;
+	deltaToPersonal?: number;
+	deltaToOverall?: number;
+};
+
+export type LapSummary = {
+	driverNumber: string;
+	currentLap?: number;
+	lastLap?: number;
+	lastLapTime?: number;
+	bestLap?: number;
+	bestLapTime?: number;
+	deltaToBest?: number;
+	sectorsLap?: number;
+	sectorsSource?: "current" | "last";
+	sectors: SectorSnapshot[];
+};
+
+export type PerformanceEventType = "fastest-lap" | "personal-lap" | "purple-sector";
+
+export type PerformanceEvent = {
+	id: string;
+	type: PerformanceEventType;
+	date: string;
+	driverNumber: string;
+	lap: number;
+	sector?: number;
+	value: number;
+	delta?: number;
+};
+
+export type PitEvent = {
+	id: string;
+	date: string;
+	driverNumber: string;
+	lap: number;
+	stintNumber: number;
+	compound: string;
+	tyreAgeAtStart: number;
+};
+
+export type StintSummary = {
+	driverNumber: string;
+	stintNumber?: number;
+	compound?: string;
+	lapStart?: number;
+	lapEnd?: number;
+	stintLap?: number;
+	tyreAge?: number;
+	tyreAgeAtStart?: number;
 };
 
 export type ReplaySession = {
@@ -43,6 +104,8 @@ export type ReplaySession = {
 	lap_records?: number;
 	stint_records?: number;
 	race_control_records?: number;
+	team_radio_records?: number;
+	weather_records?: number;
 };
 
 export type DriverMapEntry = {
@@ -89,7 +152,25 @@ export type RaceControlMessage = {
 	driverNumber?: string;
 };
 
+export type TeamRadioMessage = {
+	date: string;
+	driverNumber: string;
+	recordingUrl: string;
+};
+
+export type WeatherSnapshot = {
+	date: string;
+	airTemperature: number;
+	trackTemperature: number;
+	humidity: number;
+	pressure: number;
+	rainfall: number;
+	windDirection: number;
+	windSpeed: number;
+};
+
 export type DataSourceStatus = "idle" | "connecting" | "ready" | "error" | "stopped";
+export type LiveHealth = "idle" | "healthy" | "degraded" | "poor";
 
 export type ReplayControlState = {
 	isPlaying: boolean;
@@ -118,6 +199,14 @@ export type F1DataEvent =
 			trackPath?: TrackPathPoint[];
 			trackFlag?: TrackFlag;
 			raceControlMessages?: RaceControlMessage[];
+			teamRadioMessages?: TeamRadioMessage[];
+			teamRadioAlertMessages?: TeamRadioMessage[];
+			performanceEvents?: PerformanceEvent[];
+			pitEvents?: PitEvent[];
+			totalLaps?: number;
+			weather?: WeatherSnapshot | null;
+			lapSummary?: LapSummary | null;
+			stintSummary?: StintSummary | null;
 			replayControl?: ReplayControlState;
 	  }
 	| {
@@ -151,6 +240,8 @@ export type F1DataEvent =
 			mode: AppMode;
 			status: DataSourceStatus;
 			message?: string;
+			liveHealth?: LiveHealth;
+			liveHealthLabel?: string;
 	  }
 	| {
 			type: "replay-control";
@@ -165,7 +256,9 @@ export type ElectronAPI = {
 	onF1Data: (callback: (data: F1DataEvent) => void) => () => void;
 	setMode: (mode: AppMode) => void;
 	getSessions: () => Promise<ReplaySession[]>;
+	openExternalUrl: (url: string) => Promise<boolean>;
 	setReplaySession: (sessionKey: number) => void;
 	setReplayControl: (command: ReplayCommand) => void;
 	setFocusedDriver: (driverNumber: string) => void;
+	setDiscordPresenceEnabled: (enabled: boolean) => void;
 };
